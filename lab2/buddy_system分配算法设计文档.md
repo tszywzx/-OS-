@@ -202,6 +202,12 @@ buddy_system_free_pages(struct Page *base, size_t n)
 
 ## 4、测试用例
 
+从3个方面测试
+
+>+ 内存分配的2的幂次
+>+ 内存块的合并：
+>+ 内存块的连续性
+
 ```
 static void
 buddy_check(void)
