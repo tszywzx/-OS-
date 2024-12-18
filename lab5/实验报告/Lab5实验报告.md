@@ -30,20 +30,143 @@
 
 **答：**
 
-1. 初始化进程：
-在 init_main() 函数中，通过 kernel_thread() 创建并启动一个内核线程，内核线程通过调用 do_fork() 创建一个新的进程并唤醒它。
-kernel_thread 调用 do_fork()，这会分配新的进程并设置其为可运行状态 (RUNNABLE)，进程开始运行。
-2. 进程执行 user_main() 函数：
-进程创建后，执行 user_main() 函数，直到遇到宏 KERNEL_EXECVE()。
-KERNEL_EXECVE(x) 宏会调用 kernel_execve()，该函数设置进程进入内核态并执行 ebreak 指令，触发断点异常（breakpoint exception）。
-3. 断点异常触发：
-断点异常触发时，执行 trap() 函数，调用 trap_dispatch() 来处理不同类型的异常。
-当异常是 CAUSE_BREAKPOINT，并且 tf->gpr.a7 == 10 时，系统会通过 syscall() 调用 sys_exec()，进而调用 do_execve() 函数。
-4. 执行 do_execve()：
-在 do_execve() 中，系统加载新的程序文件（应用程序）到内存中，调用 load_icode() 来执行此操作。
-一旦文件加载完毕，控制返回到 __trapret 标签，执行 __trapret 中的代码，退出内核态并返回用户态。
-5. 返回用户态并执行程序：
-通过执行 sret 指令，内核从内核态切换回用户态，进程开始执行加载的用户程序的第一条指令。
+在init_main中调用kernel_thread
+
+```c
+static int
+init_main(void *arg) {
+    ...
+    int pid = kernel_thread(user_main, NULL, 0);
+    ...
+}
+```
+
+kernel_thread中调用do_fork创建并唤醒进程
+
+```c
+int
+kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags) {
+    ...
+    return do_fork(clone_flags | CLONE_VM, 0, &tf);
+}
+```
+
+随之执行参数中函数user_main，进程开始执行
+
+```c
+static int
+user_main(void *arg) {
+...
+#else
+    KERNEL_EXECVE(exit);
+...
+}
+```
+
+user_main函数调用宏KERNEL_EXECVE
+
+```c
+#define KERNEL_EXECVE(x) ({                                             
+            ...
+            __KERNEL_EXECVE(#x, _binary_obj___user_##x##_out_start,     \
+                            _binary_obj___user_##x##_out_size);         \
+        })
+```
+
+宏KERNEL_EXECVE调用kernel_execve,执行ebreak，发生断点异常
+
+```c
+static int
+kernel_execve(const char *name, unsigned char *binary, size_t size) {
+    ...
+    asm volatile(
+        ...
+        "ebreak\n"
+        ...)
+    ...
+}
+```
+
+断点异常产生，执行trap函数,调用trap_dispatch函数
+
+```c
+void trap(struct trapframe *tf) { trap_dispatch(tf); }
+```
+
+trap_dispatch函数调用exception_handler函数
+
+```c
+static inline void trap_dispatch(struct trapframe *tf) {
+    ...
+    else {
+        exception_handler(tf);
+    }
+}
+```
+
+trap_dispatch函数执行到CAUSE_BREAKPOINT处,调用syscall
+
+```c
+void exception_handler(struct trapframe *tf) {
+    switch (tf->cause) {
+        ...
+         case CAUSE_BREAKPOINT:
+            if(tf->gpr.a7 == 10){
+                tf->epc += 4;
+                syscall();
+                kernel_execve_ret(tf,current->kstack+KSTACKSIZE);
+            }
+            break;
+        ...
+    }
+}
+```
+
+syscall根据参数，执行sys_exec，调用do_execve
+
+```c
+void
+syscall(void) {
+    struct trapframe *tf = current->tf;
+    uint64_t arg[5];
+    int num = tf->gpr.a0;
+    if (num >= 0 && num < NUM_SYSCALLS) {
+        if (syscalls[num] != NULL) {
+            arg[0] = tf->gpr.a1;
+            arg[1] = tf->gpr.a2;
+            arg[2] = tf->gpr.a3;
+            arg[3] = tf->gpr.a4;
+            arg[4] = tf->gpr.a5;
+            tf->gpr.a0 = syscalls[num](arg);
+            return ;
+        }
+    }   
+```
+
+
+
+```c
+static int
+sys_exec(uint64_t arg[]) {
+    ...
+    return do_execve(name, len, binary, size);
+}
+```
+
+do_execve调用load_icode，加载文件
+
+```c
+int
+do_execve(const char *name, size_t len, unsigned char *binary, size_t size) {
+    ...
+    if ((ret = load_icode(binary, size)) != 0) {
+        goto execve_exit;
+    }
+    ...
+}
+```
+
+加载完毕，返回至__alltraps的末尾，执行__trapret后的内容，直到sret，退出内核态，回到用户态，执行加载的文件。
 
 ### 2、练习二
 
@@ -187,7 +310,7 @@ alloc_page()--> PROC_UNINIT --wakeup_proc()--> RUNNABLE --> do_exit() --> PROC_Z
 
 **问题：**实现 Copy on Write （COW）机制
 
-**答：**具体见COW机制设计报告
+**答：**未实现
 
 ### 2、拓展练习二
 
